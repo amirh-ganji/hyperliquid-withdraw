@@ -1,28 +1,35 @@
 """
-اسکریپت برداشت از Hyperliquid با استفاده از SDK رسمی
-======================================================
+Hyperliquid Withdrawal Script (using the official SDK)
+========================================================
 
-نکات امنیتی مهم (حتماً بخونید):
-1. این اسکریپت باید فقط روی کامپیوتر خودتون اجرا بشه، نه روی هیچ سرور یا سرویس شخص ثالث.
-2. کلید خصوصی (private key) رو هرگز در جایی آپلود نکنید، به کسی ندید، و در گیت‌هاب/تلگرام/دیسکورد قرار ندید.
-3. کلید رو از طریق متغیر محیطی (environment variable) وارد می‌کنیم، نه داخل کد.
-4. قبل از اجرا، حتماً مستندات رسمی رو چک کنید چون نام متدهای SDK ممکنه تغییر کرده باشه:
+Important security notes (please read):
+
+1. Run this script only on your own computer, never on a server or third-party service.
+2. The private key is never written into this file. This version only reads it from
+   an environment variable or a hidden (masked) prompt, specifically so it can never
+   be accidentally committed to version control.
+3. Set the key in your terminal, only for that one session, like this:
+
+   Linux/macOS:
+       export HL_PRIVATE_KEY="0xYOUR_PRIVATE_KEY"
+       export HL_WITHDRAW_ADDRESS="0xYOUR_DESTINATION_ADDRESS"
+       python3 hyperliquid_withdraw.py
+
+   Windows (PowerShell):
+       $env:HL_PRIVATE_KEY="0xYOUR_PRIVATE_KEY"
+       $env:HL_WITHDRAW_ADDRESS="0xYOUR_DESTINATION_ADDRESS"
+       python3 hyperliquid_withdraw.py
+
+   These variables are cleared automatically once you close the terminal.
+4. Before running, check the official docs since SDK method names may have changed:
    https://github.com/hyperliquid-dex/hyperliquid-python-sdk
    https://hyperliquid.gitbook.io/hyperliquid-docs/
 
-نصب پیش‌نیازها:
+Install requirements:
     pip install hyperliquid-python-sdk
-
-نحوه استفاده:
-    مقادیر PRIVATE_KEY و WITHDRAW_ADDRESS رو در پایین همین فایل (داخل بخش مشخص‌شده)
-    پر کنید و بعد فایل رو اجرا کنید:
-        python3 hyperliquid_withdraw.py
-
-    نکته: چون کلید خصوصی داخل همین فایل نوشته می‌شه، بعد از اتمام کار،
-    یا فایل رو پاک کنید یا مقدار PRIVATE_KEY رو دوباره خالی (="") کنید،
-    و هرگز این فایل رو (با کلید پر شده) با کسی به اشتراک نذارید یا آپلود نکنید.
 """
 
+import getpass
 import os
 import sys
 
@@ -32,96 +39,101 @@ try:
     from hyperliquid.info import Info
     from hyperliquid.utils import constants
 except ImportError:
-    print("لطفاً اول کتابخانه‌ها رو نصب کنید:")
+    print("Please install the required library first:")
     print("    pip install hyperliquid-python-sdk")
     sys.exit(1)
 
 
-# ==============================================================
-#  فقط همین دو خط زیر رو با اطلاعات خودتون پر کنید
-#  (بقیه کد رو لازم نیست تغییر بدید)
-# ==============================================================
+def get_private_key():
+    """Read the key only from an environment variable, or prompt for it (masked, like a password)."""
+    key = os.getenv("HL_PRIVATE_KEY")
+    if key:
+        return key
+    print("Environment variable HL_PRIVATE_KEY is not set.")
+    key = getpass.getpass("Enter your private key (input hidden): ").strip()
+    if not key:
+        print("Error: no private key was entered.")
+        sys.exit(1)
+    return key
 
-PRIVATE_KEY = "00000000000000000000"        # <-- کلید خصوصی ولت هایپرلیکوئید خودتون رو اینجا بین "" بذارید
-WITHDRAW_ADDRESS = "0x0000000000000"   # <-- آدرس متامسک آربیتروم خودتون رو اینجا بین "" بذارید
 
-# ==============================================================
-#  از این خط به پایین دیگه نیازی به تغییر نیست
-# ==============================================================
+def get_withdraw_address():
+    address = os.getenv("HL_WITHDRAW_ADDRESS")
+    if address:
+        return address
+    address = input("Enter the destination address (Arbitrum): ").strip()
+    if not address:
+        print("Error: no destination address was entered.")
+        sys.exit(1)
+    return address
 
 
 def main():
-    # اول از متغیرهای بالا می‌خونه؛ اگه خالی بود، از environment variable هم امتحان می‌کنه
-    private_key = PRIVATE_KEY or os.getenv("HL_PRIVATE_KEY")
-    withdraw_address = WITHDRAW_ADDRESS or os.getenv("HL_WITHDRAW_ADDRESS")
+    private_key = get_private_key()
+    withdraw_address = get_withdraw_address()
 
-    if not private_key:
-        print("خطا: مقدار PRIVATE_KEY رو در بالای فایل خالی گذاشتید.")
-        print("برید بالای فایل و کلید خصوصی رو بین گیومه‌ها وارد کنید.")
+    try:
+        wallet = Account.from_key(private_key)
+    except Exception as e:
+        print(f"Error: invalid private key: {e}")
         sys.exit(1)
 
-    if not withdraw_address:
-        print("خطا: مقدار WITHDRAW_ADDRESS رو در بالای فایل خالی گذاشتید.")
-        print("برید بالای فایل و آدرس متامسک رو بین گیومه‌ها وارد کنید.")
-        sys.exit(1)
-
-    wallet = Account.from_key(private_key)
     address = wallet.address
-    print(f"آدرس ولت شما: {address}")
+    print(f"Your wallet address: {address}")
 
-    # اتصال به شبکه اصلی (mainnet)
     base_url = constants.MAINNET_API_URL
     info = Info(base_url, skip_ws=True)
     exchange = Exchange(wallet, base_url)
 
-    # 1) بررسی وضعیت فعلی حساب (Perp و Spot)
-    print("\n--- در حال بررسی موجودی ---")
+    print("\n--- Checking balances ---")
     try:
         user_state = info.user_state(address)
         spot_state = info.spot_user_state(address)
-        print("وضعیت Perp:", user_state.get("marginSummary", {}))
-        print("وضعیت Spot:", spot_state.get("balances", []))
+        print("Perp state:", user_state.get("marginSummary", {}))
+        print("Spot state:", spot_state.get("balances", []))
     except Exception as e:
-        print(f"خطا در دریافت وضعیت حساب: {e}")
+        print(f"Error fetching account state: {e}")
         sys.exit(1)
 
     perp_usdc = float(user_state.get("marginSummary", {}).get("accountValue", 0))
-    print(f"\nموجودی تقریبی در Perp: {perp_usdc} USDC")
+    print(f"\nApproximate Perp balance: {perp_usdc} USDC")
 
     if perp_usdc <= 0:
-        print("موجودی قابل انتقالی در بخش Perp پیدا نشد.")
+        print("No transferable balance found in Perp.")
         return
 
-    # 2) انتقال موجودی از Perp به Spot (در صورت نیاز)
-    amount_to_move = round(perp_usdc - 1, 2)  # کمی مارجین برای کارمزد/تغییرات نگه می‌داریم
+    amount_to_move = round(perp_usdc - 1, 2)  # keep a small margin for fees/fluctuations
     if amount_to_move > 0:
         confirm = input(
-            f"\nآیا می‌خواید {amount_to_move} USDC از Perp به Spot منتقل بشه؟ (yes/no): "
+            f"\nTransfer {amount_to_move} USDC from Perp to Spot? (yes/no): "
         )
         if confirm.strip().lower() == "yes":
             try:
-                # نام دقیق متد ممکنه در نسخه‌های مختلف SDK فرق کنه - مستندات رو چک کنید
+                # exact method name may differ between SDK versions — check the docs
                 result = exchange.usd_class_transfer(amount_to_move, to_perp=False)
-                print("نتیجه انتقال Perp -> Spot:", result)
+                print("Perp -> Spot transfer result:", result)
             except Exception as e:
-                print(f"خطا در انتقال: {e}")
+                print(f"Transfer error: {e}")
                 sys.exit(1)
 
-    # 3) برداشت از Spot به آدرس مقصد (روی شبکه Arbitrum)
     confirm2 = input(
-        f"\nآیا می‌خواید موجودی به آدرس {withdraw_address} برداشت بشه؟ (yes/no): "
+        f"\nWithdraw the balance to address {withdraw_address}? (yes/no): "
     )
     if confirm2.strip().lower() == "yes":
-        withdraw_amount = input("مقدار USDC برای برداشت را وارد کنید: ")
+        raw_amount = input("Enter the USDC amount to withdraw: ")
         try:
-            withdraw_amount = float(withdraw_amount)
+            withdraw_amount = float(raw_amount)
+        except ValueError:
+            print("Error: the amount entered is not a valid number.")
+            sys.exit(1)
+        try:
             result = exchange.withdraw_from_bridge(withdraw_amount, withdraw_address)
-            print("نتیجه برداشت:", result)
+            print("Withdrawal result:", result)
         except Exception as e:
-            print(f"خطا در برداشت: {e}")
+            print(f"Withdrawal error: {e}")
             sys.exit(1)
 
-    print("\nتمام. لطفاً وضعیت آدرس مقصد رو در اکسپلورر Arbitrum (arbiscan.io) چک کنید.")
+    print("\nDone. Please check the destination address on the Arbitrum explorer (arbiscan.io).")
 
 
 if __name__ == "__main__":
